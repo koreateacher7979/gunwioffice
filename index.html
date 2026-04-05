@@ -33,6 +33,10 @@
     <div id="app" class="w-full h-full flex flex-col"></div>
 
 <script>
+    // --- 0. 파이어베이스 및 글로벌 변수 ---
+    let fbUser = null;
+    let setDoc, deleteDoc, doc, collection, onSnapshot, db, appId;
+
     // --- 1. 상태 관리 (State) ---
     const SHEET_URL = 'https://docs.google.com/spreadsheets/d/1Qezwd8-xJS07xTGWY__cI1pVPFv1lZNBV86U8wbYvwk/gviz/tq?tqx=out:csv';
     const ADMIN_CODE = 'STF-790920';
@@ -56,12 +60,90 @@
             { id: 9, name: '3학년부', type: 'board', subs: ['공지사항', '자료실'] },
             { id: 10, name: '행정실', type: 'board', subs: ['공지사항', '자료실'] }
         ],
-        posts: [], // { id, category, subCategory, title, content, author, date, files: [{name, url, type}], views }
+        posts: [],
         viewPostId: null,
         isWriteMode: false,
         isAdminMode: false,
         isMobileMenuOpen: false
     };
+
+    // --- 데이터베이스 초기화 및 리스너 ---
+    async function initFirebase() {
+        try {
+            const { initializeApp } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js");
+            const { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js");
+            const firestore = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+            
+            setDoc = firestore.setDoc;
+            deleteDoc = firestore.deleteDoc;
+            doc = firestore.doc;
+            collection = firestore.collection;
+            onSnapshot = firestore.onSnapshot;
+
+            const firebaseConfigStr = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
+            if (!firebaseConfigStr) return; // 로컬 전용 모드
+            
+            const firebaseConfig = JSON.parse(firebaseConfigStr);
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            db = firestore.getFirestore(app);
+            appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+            const initAuth = async () => {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            };
+            await initAuth();
+            
+            onAuthStateChanged(auth, (user) => {
+                fbUser = user;
+                if (user) setupListeners();
+            });
+        } catch(e) {
+            console.error("Firebase 초기화 에러", e);
+        }
+    }
+
+    function setupListeners() {
+        if (!fbUser || !db) return;
+
+        // 게시글 실시간 리스너
+        const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
+        onSnapshot(postsRef, (snapshot) => {
+            const loadedPosts = [];
+            snapshot.forEach(d => loadedPosts.push({ id: d.id, ...d.data() }));
+            // 최신글이 위로 오도록 정렬
+            loadedPosts.sort((a, b) => new Date(b.date) - new Date(a.date));
+            state.posts = loadedPosts;
+            render();
+        }, (error) => console.error("게시글 로드 에러", error));
+
+        // 카테고리 실시간 리스너
+        const categoriesRef = collection(db, 'artifacts', appId, 'public', 'data', 'categories');
+        onSnapshot(categoriesRef, (snapshot) => {
+            const customCats = [];
+            snapshot.forEach(d => customCats.push({ id: d.id, ...d.data() }));
+            
+            const defaultCats = [
+                { id: 1, name: '교무부', type: 'board', subs: ['공지사항', '자료실'] },
+                { id: 2, name: '학생안전부', type: 'board', subs: ['공지사항', '자료실'] },
+                { id: 3, name: '교육연구부', type: 'board', subs: ['공지사항', '자료실'] },
+                { id: 4, name: '교육과정부', type: 'board', subs: ['공지사항', '자료실'] },
+                { id: 5, name: '교육정보부', type: 'board', subs: ['공지사항', '자료실'] },
+                { id: 6, name: '교육혁신부', type: 'board', subs: ['공지사항', '자료실'] },
+                { id: 7, name: '1학년부', type: 'board', subs: ['공지사항', '자료실'] },
+                { id: 8, name: '2학년부', type: 'board', subs: ['공지사항', '자료실'] },
+                { id: 9, name: '3학년부', type: 'board', subs: ['공지사항', '자료실'] },
+                { id: 10, name: '행정실', type: 'board', subs: ['공지사항', '자료실'] }
+            ];
+            state.categories = [...defaultCats, ...customCats];
+            render();
+        }, (error) => console.error("카테고리 로드 에러", error));
+    }
+
 
     // --- 2. 유틸리티 (Utils) ---
     function showToast(message, type = 'success') {
@@ -82,7 +164,6 @@
         }, 3000);
     }
 
-    // CSV 파서 (따옴표 및 쉼표 처리)
     function parseCSV(str) {
         const arr = [];
         let quote = false;
@@ -116,7 +197,6 @@
             const csvText = await response.text();
             const rows = parseCSV(csvText);
             
-            // 첫 번째 행이 헤더인지 확인 (이름, 코드, 부서, 직위)
             let startIndex = 0;
             if(rows[0] && (rows[0][0].includes('이름') || rows[0][1].includes('코드'))) {
                 startIndex = 1;
@@ -136,12 +216,8 @@
             state.users = users;
             state.isSheetLoaded = true;
         } catch (error) {
-            console.error("구글 시트 로드 실패:", error);
             state.sheetError = true;
-            // 로드 실패 시 샘플 데이터 제공 (개발/테스트용)
-            state.users = [
-                { name: '테스트교사', code: 'TEST-1234', dept: '교무부', role: '교사' }
-            ];
+            state.users = [{ name: '테스트교사', code: 'TEST-1234', dept: '교무부', role: '교사' }];
             showToast("구글 시트 연동에 실패하여 임시 데이터로 구동됩니다.", "error");
         }
         render();
@@ -152,10 +228,7 @@
         e.preventDefault();
         const codeInput = document.getElementById('user-code').value.trim();
         
-        if (!codeInput) {
-            showToast('교직원 코드를 입력해주세요.', 'error');
-            return;
-        }
+        if (!codeInput) return showToast('교직원 코드를 입력해주세요.', 'error');
 
         if (codeInput === ADMIN_CODE) {
             state.currentUser = { name: '시스템 관리자', code: ADMIN_CODE, dept: '시스템운영', role: '최고관리자', isAdmin: true };
@@ -170,7 +243,7 @@
             showToast(`${user.name} 선생님, 환영합니다.`);
             render();
         } else {
-            showToast('등록되지 않은 코드입니다. 코드를 다시 확인해주세요.', 'error');
+            showToast('등록되지 않은 코드입니다.', 'error');
         }
     }
 
@@ -204,7 +277,6 @@
         render();
     }
 
-    // 게시판 관련
     function goToList() {
         state.viewPostId = null;
         state.isWriteMode = false;
@@ -217,21 +289,37 @@
         render();
     }
 
-    function viewPost(id) {
+    async function viewPost(id) {
         const post = state.posts.find(p => p.id === id);
         if (post) {
-            post.views = (post.views || 0) + 1;
             state.viewPostId = id;
             state.isWriteMode = false;
+            
+            const newViews = (post.views || 0) + 1;
+            post.views = newViews; // 로컬 즉시 반영
             render();
+
+            if (fbUser && db) {
+                try {
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'posts', id), { ...post, views: newViews });
+                } catch(e) { console.error("조회수 증가 에러", e); }
+            }
         }
     }
 
-    function deletePost(id) {
+    async function deletePost(id) {
         if(confirm('정말 이 게시글을 삭제하시겠습니까?')) {
-            state.posts = state.posts.filter(p => p.id !== id);
-            showToast('게시글이 삭제되었습니다.');
-            goToList();
+            if (fbUser && db) {
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'posts', id));
+                    showToast('게시글이 삭제되었습니다.');
+                    goToList();
+                } catch(e) { showToast('삭제에 실패했습니다.', 'error'); }
+            } else {
+                state.posts = state.posts.filter(p => p.id !== id);
+                showToast('게시글이 삭제되었습니다.');
+                goToList();
+            }
         }
     }
 
@@ -243,17 +331,22 @@
         
         let filesData = [];
         
+        // 데이터베이스 문서 제한 크기 확인 (대략 800KB)
+        let totalSize = 0;
         if (fileInput.files.length > 0) {
-            showToast('파일을 처리하는 중입니다...', 'info');
+            for (let i = 0; i < fileInput.files.length; i++) totalSize += fileInput.files[i].size;
+            if (totalSize > 800 * 1024) {
+                return showToast('첨부파일의 총 용량이 너무 큽니다 (최대 800KB). 파일 크기를 줄여주세요.', 'error');
+            }
+            
+            showToast('데이터를 동기화 중입니다...', 'info');
             for (let i = 0; i < fileInput.files.length; i++) {
                 const file = fileInput.files[i];
-                // 브라우저 메모리에만 저장하기 위해 Data URL 변환
                 const dataUrl = await new Promise((resolve) => {
                     const reader = new FileReader();
                     reader.onload = (e) => resolve(e.target.result);
                     reader.readAsDataURL(file);
                 });
-                
                 filesData.push({
                     name: file.name,
                     type: file.type.startsWith('image/') ? 'image' : 'file',
@@ -262,8 +355,8 @@
             }
         }
 
+        const postId = generateId();
         const newPost = {
-            id: generateId(),
             category: state.currentCategory,
             subCategory: state.currentSubCategory,
             title,
@@ -275,12 +368,22 @@
             views: 0
         };
 
-        state.posts.unshift(newPost); // 최신글이 위로
-        showToast('게시글이 성공적으로 등록되었습니다.');
-        goToList();
+        if (fbUser && db) {
+            try {
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId), newPost);
+                showToast('게시글이 모든 사용자에게 등록되었습니다.');
+                goToList();
+            } catch (error) {
+                console.error(error);
+                showToast('업로드 용량 초과 등 서버 통신에 실패했습니다.', 'error');
+            }
+        } else {
+            state.posts.unshift({ id: postId, ...newPost });
+            showToast('로컬에 임시 등록되었습니다. (DB 연결 안 됨)');
+            goToList();
+        }
     }
 
-    // 관리자 기능
     function openAdminMode() {
         state.isAdminMode = true;
         state.viewPostId = null;
@@ -294,34 +397,49 @@
         render();
     }
 
-    function handleAddLinkMenu(e) {
+    async function handleAddLinkMenu(e) {
         e.preventDefault();
         const linkName = document.getElementById('link-name').value;
         const linkUrl = document.getElementById('link-url').value;
         
         if(linkName && linkUrl) {
-            state.categories.push({
-                id: generateId(),
-                name: linkName,
-                type: 'link',
-                url: linkUrl
-            });
-            showToast('외부 링크 메뉴가 추가되었습니다.');
-            render();
+            const catId = generateId();
+            const newCat = { name: linkName, type: 'link', url: linkUrl };
+            
+            if (fbUser && db) {
+                try {
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'categories', catId), newCat);
+                    showToast('외부 링크 메뉴가 모든 사용자에게 추가되었습니다.');
+                    // Snapshot will trigger render
+                } catch(e) { showToast('메뉴 추가 실패', 'error'); }
+            } else {
+                state.categories.push({ id: catId, ...newCat });
+                showToast('로컬에 추가되었습니다.');
+                render();
+            }
         }
     }
 
-    function deleteCategory(id) {
+    async function deleteCategory(id) {
         if(confirm('이 메뉴를 삭제하시겠습니까? (관련된 게시글은 보이지 않게 됩니다)')) {
-            state.categories = state.categories.filter(c => c.id !== id);
-            showToast('메뉴가 삭제되었습니다.');
-            // 현재 보고 있던 메뉴가 삭제되었다면 첫 메뉴로 이동
-            if (!state.categories.find(c => c.name === state.currentCategory)) {
-                if(state.categories.length > 0) {
-                     selectMenu(state.categories[0].name, state.categories[0].subs ? state.categories[0].subs[0] : null);
-                }
+            if (!isNaN(id) && Number(id) <= 10) {
+                 return showToast('기본 카테고리는 삭제할 수 없습니다.', 'error');
+            }
+
+            if (fbUser && db) {
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'categories', String(id)));
+                    showToast('메뉴가 삭제되었습니다.');
+                    if (!state.categories.find(c => c.id === id && c.name === state.currentCategory)) {
+                         selectMenu(state.categories[0].name, state.categories[0].subs ? state.categories[0].subs[0] : null);
+                    }
+                } catch(e) { showToast('삭제 실패', 'error'); }
             } else {
-                render();
+                state.categories = state.categories.filter(c => c.id !== id);
+                showToast('로컬에서 삭제되었습니다.');
+                if (!state.categories.find(c => c.name === state.currentCategory)) {
+                    if(state.categories.length > 0) selectMenu(state.categories[0].name, state.categories[0].subs[0]);
+                } else { render(); }
             }
         }
     }
@@ -331,7 +449,7 @@
         const app = document.getElementById('app');
         if (!state.currentUser) {
             app.innerHTML = renderLoginScreen();
-            if(!state.isSheetLoaded) fetchUsers(); // 최초 진입 시 데이터 로드
+            if(!state.isSheetLoaded) fetchUsers();
         } else {
             app.innerHTML = renderMainLayout();
         }
@@ -494,8 +612,6 @@
         `;
     }
 
-    // --- 메인 뷰 컴포넌트 ---
-
     function renderBoardList() {
         const filteredPosts = state.posts.filter(p => p.category === state.currentCategory && p.subCategory === state.currentSubCategory);
 
@@ -595,7 +711,7 @@
                             취소
                         </button>
                         <button type="submit" class="px-4 py-1.5 bg-blue-600 rounded text-xs text-white font-medium hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5">
-                            <i class="fas fa-check"></i> 등록하기
+                            <i class="fas fa-check"></i> 등록하기 (동기화)
                         </button>
                     </div>
                 </form>
@@ -703,7 +819,7 @@
                                     placeholder="연결할 URL (https://...)">
                             </div>
                             <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium py-1.5 rounded shadow-sm transition-colors">
-                                메뉴 추가
+                                메뉴 추가 (모든 사용자 동기화)
                             </button>
                         </form>
                     </div>
@@ -736,22 +852,22 @@
                 
                 <div class="mt-6 bg-blue-50 rounded-lg p-5 border border-blue-100">
                     <h3 class="text-blue-800 font-bold mb-2 flex items-center gap-2 text-sm">
-                        <i class="fas fa-info-circle"></i> 관리자 안내사항
+                        <i class="fas fa-info-circle"></i> 데이터베이스 활성화됨
                     </h3>
                     <ul class="text-xs text-blue-700 space-y-1 list-disc list-inside">
-                        <li>현재 시스템은 브라우저 메모리 기반으로 동작하므로, <strong>새로고침 시 등록한 게시글과 추가한 메뉴가 초기화</strong>됩니다.</li>
+                        <li>이제 등록한 모든 게시물과 메뉴는 <strong>실시간으로 모든 교직원에게 동기화</strong>됩니다.</li>
                         <li>모든 게시물 삭제 권한을 가집니다. 게시판에서 게시글 조회 후 우측 상단의 삭제 버튼을 이용하세요.</li>
-                        <li>교직원 데이터는 연결된 구글 스프레드시트에서 실시간으로 가져옵니다. (접속 코드 등)</li>
+                        <li>단일 문서 저장 방식의 특성상 <strong>한 번에 첨부 가능한 파일 용량이 최대 800KB로 제한</strong>됩니다.</li>
                     </ul>
                 </div>
             </div>
         `;
     }
 
-    // 초기화
+    // --- 초기화 ---
     window.onload = () => {
-        render(); // 최초 로그인 화면 렌더링
-        // fetchUsers는 로그인 화면 내부에서 자동 호출됨
+        render(); 
+        initFirebase(); // 파이어베이스 초기화 및 실시간 데이터 연동 시작
     };
 </script>
 </body>
