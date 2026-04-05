@@ -8,10 +8,12 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         /* 커스텀 스크롤바 */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         
         /* 토스트 메시지 애니메이션 */
         @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
@@ -22,13 +24,13 @@
         body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; }
     </style>
 </head>
-<body class="bg-gray-50 text-gray-800 h-screen overflow-hidden flex flex-col">
+<body class="bg-gray-50 text-gray-800 h-screen w-screen overflow-hidden flex flex-col">
 
     <!-- Toast Notification Container -->
     <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2"></div>
 
     <!-- App Container -->
-    <div id="app" class="w-full h-full"></div>
+    <div id="app" class="w-full h-full flex flex-col"></div>
 
 <script>
     // --- 1. 상태 관리 (State) ---
@@ -245,7 +247,7 @@
             showToast('파일을 처리하는 중입니다...', 'info');
             for (let i = 0; i < fileInput.files.length; i++) {
                 const file = fileInput.files[i];
-                // 브라우저 메모리에만 저장하기 위해 Data URL 변환 (실제 서비스에선 서버 업로드 필요)
+                // 브라우저 메모리에만 저장하기 위해 Data URL 변환
                 const dataUrl = await new Promise((resolve) => {
                     const reader = new FileReader();
                     reader.onload = (e) => resolve(e.target.result);
@@ -340,7 +342,7 @@
             `<div class="text-blue-600 mt-2 text-sm animate-pulse"><i class="fas fa-spinner fa-spin mr-2"></i> 구글 스프레드시트 데이터 연동 중...</div>` : '';
 
         return `
-            <div class="h-full flex items-center justify-center bg-[url('https://images.unsplash.com/photo-1541339907198-e08756dedf3f?ixlib=rb-4.0.3&auto=format&fit=crop&w=1920&q=80')] bg-cover bg-center">
+            <div class="h-full w-full flex items-center justify-center bg-[url('https://images.unsplash.com/photo-1541339907198-e08756dedf3f?ixlib=rb-4.0.3&auto=format&fit=crop&w=1920&q=80')] bg-cover bg-center">
                 <div class="absolute inset-0 bg-gray-900 bg-opacity-60 backdrop-blur-sm"></div>
                 <div class="relative bg-white p-6 sm:p-8 rounded-2xl shadow-2xl w-full max-w-md m-4 transform transition-all">
                     <div class="text-center mb-6">
@@ -385,8 +387,8 @@
     function renderMainLayout() {
         return `
             <!-- Top Navigation -->
-            <nav class="bg-white border-b border-gray-200 z-30 relative shrink-0">
-                <div class="max-w-full mx-auto px-4 sm:px-6">
+            <nav class="bg-white border-b border-gray-200 z-30 relative shrink-0 w-full">
+                <div class="w-full mx-auto px-4 sm:px-6">
                     <div class="flex justify-between h-14">
                         <div class="flex items-center">
                             <!-- Mobile menu button -->
@@ -422,10 +424,10 @@
                 </div>
             </nav>
 
-            <div class="flex flex-1 overflow-hidden relative">
+            <div class="flex flex-1 overflow-hidden relative w-full h-full">
                 <!-- Sidebar -->
-                <aside class="${state.isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 absolute lg:static inset-y-0 left-0 w-56 bg-gray-800 text-white shadow-xl transition-transform duration-300 ease-in-out z-20 flex flex-col">
-                    <div class="flex-1 overflow-y-auto py-2">
+                <aside class="${state.isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 absolute lg:static inset-y-0 left-0 w-56 bg-gray-800 text-white shadow-xl transition-transform duration-300 ease-in-out z-20 flex flex-col shrink-0 h-full">
+                    <div class="flex-1 overflow-y-auto py-2 custom-scrollbar">
                         <div class="px-3 mb-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider mt-2">메뉴 카테고리</div>
                         <nav class="space-y-0.5">
                             ${state.categories.map(cat => {
@@ -480,8 +482,8 @@
                 ` : ''}
 
                 <!-- Main Content Area -->
-                <main class="flex-1 bg-gray-50 overflow-y-auto w-full relative">
-                    <div class="max-w-6xl mx-auto py-4 px-3 sm:px-6 lg:px-8">
+                <main class="flex-1 bg-gray-50 overflow-hidden w-full h-full relative flex flex-col">
+                    <div class="w-full h-full max-w-screen-2xl mx-auto py-4 px-3 sm:px-6 lg:px-8 flex flex-col min-h-0">
                         ${state.isAdminMode ? renderAdminPanel() : 
                           state.isWriteMode ? renderWriteForm() : 
                           state.viewPostId ? renderPostView() : 
@@ -495,11 +497,10 @@
     // --- 메인 뷰 컴포넌트 ---
 
     function renderBoardList() {
-        // 현재 카테고리 필터링
         const filteredPosts = state.posts.filter(p => p.category === state.currentCategory && p.subCategory === state.currentSubCategory);
 
         return `
-            <div class="mb-3 flex justify-between items-end">
+            <div class="mb-3 flex justify-between items-end shrink-0">
                 <div>
                     <h2 class="text-xl font-bold text-gray-900 flex items-center gap-2">
                         ${state.currentCategory} <i class="fas fa-chevron-right text-xs text-gray-400"></i> ${state.currentSubCategory}
@@ -510,10 +511,10 @@
                 </button>
             </div>
 
-            <div class="bg-white shadow-sm rounded-lg overflow-hidden border border-gray-200">
-                <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50">
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 flex flex-col flex-1 min-h-0">
+                <div class="overflow-y-auto flex-1 custom-scrollbar">
+                    <table class="min-w-full divide-y divide-gray-200 relative">
+                        <thead class="bg-gray-50 sticky top-0 z-10 shadow-sm">
                             <tr>
                                 <th scope="col" class="px-4 py-2 text-left text-[11px] font-medium text-gray-500 uppercase tracking-wider w-12 text-center">번호</th>
                                 <th scope="col" class="px-4 py-2 text-left text-[11px] font-medium text-gray-500 uppercase tracking-wider">제목</th>
@@ -554,16 +555,16 @@
 
     function renderWriteForm() {
         return `
-            <div class="mb-3 flex justify-between items-center border-b pb-2">
+            <div class="mb-3 flex justify-between items-center border-b pb-2 shrink-0">
                 <h2 class="text-lg font-bold text-gray-900">새 글 작성</h2>
                 <button onclick="goToList()" class="text-gray-500 hover:text-gray-700 flex items-center gap-1 text-xs font-medium">
                     <i class="fas fa-arrow-left"></i> 목록으로
                 </button>
             </div>
 
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-4 sm:p-5">
-                <form onsubmit="handlePostSubmit(event)" class="space-y-4">
-                    <div class="flex gap-2 items-center">
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-4 sm:p-5 flex flex-col flex-1 min-h-0">
+                <form onsubmit="handlePostSubmit(event)" class="flex flex-col h-full gap-3">
+                    <div class="flex gap-2 items-center shrink-0">
                         <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-800">
                             ${state.currentCategory}
                         </span>
@@ -572,24 +573,24 @@
                         </span>
                     </div>
 
-                    <div>
+                    <div class="shrink-0">
                         <input type="text" id="post-title" required
                             class="w-full px-3 py-1.5 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
                             placeholder="제목을 입력하세요">
                     </div>
 
-                    <div>
-                        <textarea id="post-content" rows="8" required
-                            class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none text-sm"
+                    <div class="flex-1 flex flex-col min-h-0">
+                        <textarea id="post-content" required
+                            class="w-full h-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none text-sm custom-scrollbar"
                             placeholder="내용을 입력하세요"></textarea>
                     </div>
 
-                    <div class="bg-gray-50 p-3 rounded border border-dashed border-gray-300">
+                    <div class="bg-gray-50 p-2 rounded border border-dashed border-gray-300 shrink-0">
                         <input type="file" id="post-files" multiple 
-                            class="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer">
+                            class="block w-full text-xs text-gray-500 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer">
                     </div>
 
-                    <div class="flex justify-end gap-2 pt-2 border-t border-gray-100">
+                    <div class="flex justify-end gap-2 pt-2 border-t border-gray-100 shrink-0">
                         <button type="button" onclick="goToList()" class="px-4 py-1.5 border border-gray-300 rounded text-xs text-gray-700 font-medium hover:bg-gray-50 transition-colors">
                             취소
                         </button>
@@ -606,15 +607,12 @@
         const post = state.posts.find(p => p.id === state.viewPostId);
         if(!post) return `<div>게시글을 찾을 수 없습니다.</div>`;
 
-        // 작성자이거나 관리자일 경우 삭제 버튼 표시
         const canDelete = state.currentUser.isAdmin || state.currentUser.name === post.author;
-
-        // 첨부파일 분리 (이미지 / 일반파일)
         const images = (post.files || []).filter(f => f.type === 'image');
         const docs = (post.files || []).filter(f => f.type === 'file');
 
         return `
-            <div class="mb-3 flex justify-between items-center border-b pb-2">
+            <div class="mb-3 flex justify-between items-center border-b pb-2 shrink-0">
                 <div class="flex items-center gap-2">
                     <button onclick="goToList()" class="text-gray-500 hover:text-gray-900 transition-colors">
                         <i class="fas fa-arrow-left text-lg"></i>
@@ -628,9 +626,9 @@
                 ` : ''}
             </div>
 
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 flex flex-col flex-1 min-h-0 overflow-hidden">
                 <!-- Header -->
-                <div class="p-4 border-b border-gray-100">
+                <div class="p-4 border-b border-gray-100 shrink-0">
                     <h1 class="text-lg font-bold text-gray-900 mb-2">${post.title}</h1>
                     <div class="flex flex-wrap items-center text-xs text-gray-500 gap-3">
                         <div class="flex items-center gap-1">
@@ -643,7 +641,7 @@
                 </div>
 
                 <!-- Content -->
-                <div class="p-4 sm:p-5 min-h-[150px]">
+                <div class="p-4 sm:p-5 flex-1 overflow-y-auto custom-scrollbar">
                     <div class="prose max-w-none text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">${post.content}</div>
                     
                     ${images.length > 0 ? `
@@ -657,15 +655,15 @@
 
                 <!-- Attachments -->
                 ${docs.length > 0 ? `
-                    <div class="bg-gray-50 p-4 border-t border-gray-100">
-                        <h3 class="text-xs font-bold text-gray-700 mb-2 flex items-center gap-1.5">
+                    <div class="bg-gray-50 p-3 border-t border-gray-100 shrink-0">
+                        <h3 class="text-xs font-bold text-gray-700 mb-1.5 flex items-center gap-1.5">
                             <i class="fas fa-paperclip"></i> 첨부파일 (${docs.length})
                         </h3>
-                        <ul class="space-y-1.5">
+                        <ul class="space-y-1 flex flex-wrap gap-2">
                             ${docs.map(doc => `
                                 <li>
-                                    <a href="${doc.url}" download="${doc.name}" class="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 hover:underline bg-white px-2.5 py-1.5 rounded border border-gray-200 shadow-sm transition-all w-full sm:w-auto">
-                                        <i class="far fa-file-alt text-gray-400"></i> <span class="truncate max-w-[200px]">${doc.name}</span>
+                                    <a href="${doc.url}" download="${doc.name}" class="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 hover:underline bg-white px-2.5 py-1 rounded border border-gray-200 shadow-sm transition-all">
+                                        <i class="far fa-file-alt text-gray-400"></i> <span class="truncate max-w-[150px]">${doc.name}</span>
                                         <i class="fas fa-download ml-1 text-[10px] text-gray-400"></i>
                                     </a>
                                 </li>
@@ -679,7 +677,7 @@
 
     function renderAdminPanel() {
         return `
-            <div class="mb-4 flex justify-between items-center border-b pb-2">
+            <div class="mb-4 flex justify-between items-center border-b pb-2 shrink-0">
                 <h2 class="text-lg font-bold text-purple-800 flex items-center gap-2">
                     <i class="fas fa-cog"></i> 시스템 관리자 메뉴
                 </h2>
@@ -688,62 +686,64 @@
                 </button>
             </div>
 
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <!-- 외부 링크 메뉴 추가 폼 -->
-                <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-4">
-                    <h3 class="text-sm font-bold text-gray-800 mb-3 border-b pb-1">새 외부 링크 메뉴 추가</h3>
-                    <form onsubmit="handleAddLinkMenu(event)" class="space-y-3">
-                        <div>
-                            <input type="text" id="link-name" required
-                                class="w-full px-2.5 py-1.5 border border-gray-300 rounded focus:ring-purple-500 focus:border-purple-500 text-sm"
-                                placeholder="메뉴 이름 (예: 나이스 접속)">
-                        </div>
-                        <div>
-                            <input type="url" id="link-url" required
-                                class="w-full px-2.5 py-1.5 border border-gray-300 rounded focus:ring-purple-500 focus:border-purple-500 text-sm"
-                                placeholder="연결할 URL (https://...)">
-                        </div>
-                        <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium py-1.5 rounded shadow-sm transition-colors">
-                            메뉴 추가
-                        </button>
-                    </form>
-                </div>
+            <div class="flex-1 overflow-y-auto custom-scrollbar pr-2 pb-4">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <!-- 외부 링크 메뉴 추가 폼 -->
+                    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-4 h-fit">
+                        <h3 class="text-sm font-bold text-gray-800 mb-3 border-b pb-1">새 외부 링크 메뉴 추가</h3>
+                        <form onsubmit="handleAddLinkMenu(event)" class="space-y-3">
+                            <div>
+                                <input type="text" id="link-name" required
+                                    class="w-full px-2.5 py-1.5 border border-gray-300 rounded focus:ring-purple-500 focus:border-purple-500 text-sm"
+                                    placeholder="메뉴 이름 (예: 나이스 접속)">
+                            </div>
+                            <div>
+                                <input type="url" id="link-url" required
+                                    class="w-full px-2.5 py-1.5 border border-gray-300 rounded focus:ring-purple-500 focus:border-purple-500 text-sm"
+                                    placeholder="연결할 URL (https://...)">
+                            </div>
+                            <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium py-1.5 rounded shadow-sm transition-colors">
+                                메뉴 추가
+                            </button>
+                        </form>
+                    </div>
 
-                <!-- 현재 메뉴 관리 리스트 -->
-                <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-4">
-                    <h3 class="text-sm font-bold text-gray-800 mb-3 border-b pb-1">현재 구성된 메뉴 관리</h3>
-                    <div class="space-y-1.5 max-h-[250px] overflow-y-auto pr-1 custom-scrollbar">
-                        ${state.categories.map(cat => `
-                            <div class="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-100">
-                                <div class="flex items-center gap-2">
-                                    <div class="w-6 h-6 rounded bg-white border border-gray-200 flex items-center justify-center text-gray-500 shrink-0">
-                                        <i class="fas ${cat.type === 'link' ? 'fa-link text-purple-500 text-[10px]' : 'fa-folder text-blue-500 text-[10px]'}"></i>
-                                    </div>
-                                    <div>
-                                        <div class="font-medium text-xs text-gray-800">${cat.name}</div>
-                                        <div class="text-[10px] text-gray-400">
-                                            ${cat.type === 'link' ? `<span class="truncate max-w-[120px] inline-block align-bottom">${cat.url}</span>` : `하위: ${cat.subs.join(', ')}`}
+                    <!-- 현재 메뉴 관리 리스트 -->
+                    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-4 flex flex-col max-h-[400px]">
+                        <h3 class="text-sm font-bold text-gray-800 mb-3 border-b pb-1 shrink-0">현재 구성된 메뉴 관리</h3>
+                        <div class="space-y-1.5 flex-1 overflow-y-auto pr-1 custom-scrollbar">
+                            ${state.categories.map(cat => `
+                                <div class="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-100">
+                                    <div class="flex items-center gap-2">
+                                        <div class="w-6 h-6 rounded bg-white border border-gray-200 flex items-center justify-center text-gray-500 shrink-0">
+                                            <i class="fas ${cat.type === 'link' ? 'fa-link text-purple-500 text-[10px]' : 'fa-folder text-blue-500 text-[10px]'}"></i>
+                                        </div>
+                                        <div>
+                                            <div class="font-medium text-xs text-gray-800">${cat.name}</div>
+                                            <div class="text-[10px] text-gray-400">
+                                                ${cat.type === 'link' ? `<span class="truncate max-w-[120px] inline-block align-bottom">${cat.url}</span>` : `하위: ${cat.subs.join(', ')}`}
+                                            </div>
                                         </div>
                                     </div>
+                                    <button onclick="deleteCategory('${cat.id}')" class="text-red-500 hover:bg-red-50 p-1.5 rounded transition-colors" title="삭제">
+                                        <i class="fas fa-trash-alt text-xs"></i>
+                                    </button>
                                 </div>
-                                <button onclick="deleteCategory('${cat.id}')" class="text-red-500 hover:bg-red-50 p-1.5 rounded transition-colors" title="삭제">
-                                    <i class="fas fa-trash-alt text-xs"></i>
-                                </button>
-                            </div>
-                        `).join('')}
+                            `).join('')}
+                        </div>
                     </div>
                 </div>
-            </div>
-            
-            <div class="mt-8 bg-blue-50 rounded-xl p-6 border border-blue-100">
-                <h3 class="text-blue-800 font-bold mb-2 flex items-center gap-2">
-                    <i class="fas fa-info-circle"></i> 관리자 안내사항
-                </h3>
-                <ul class="text-sm text-blue-700 space-y-1 list-disc list-inside">
-                    <li>현재 시스템은 브라우저 메모리 기반으로 동작하므로, <strong>새로고침 시 등록한 게시글과 추가한 메뉴가 초기화</strong>됩니다.</li>
-                    <li>모든 게시물 삭제 권한을 가집니다. 게시판에서 게시글 조회 후 우측 상단의 삭제 버튼을 이용하세요.</li>
-                    <li>교직원 데이터는 연결된 구글 스프레드시트에서 실시간으로 가져옵니다. (접속 코드 등)</li>
-                </ul>
+                
+                <div class="mt-6 bg-blue-50 rounded-lg p-5 border border-blue-100">
+                    <h3 class="text-blue-800 font-bold mb-2 flex items-center gap-2 text-sm">
+                        <i class="fas fa-info-circle"></i> 관리자 안내사항
+                    </h3>
+                    <ul class="text-xs text-blue-700 space-y-1 list-disc list-inside">
+                        <li>현재 시스템은 브라우저 메모리 기반으로 동작하므로, <strong>새로고침 시 등록한 게시글과 추가한 메뉴가 초기화</strong>됩니다.</li>
+                        <li>모든 게시물 삭제 권한을 가집니다. 게시판에서 게시글 조회 후 우측 상단의 삭제 버튼을 이용하세요.</li>
+                        <li>교직원 데이터는 연결된 구글 스프레드시트에서 실시간으로 가져옵니다. (접속 코드 등)</li>
+                    </ul>
+                </div>
             </div>
         `;
     }
