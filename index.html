@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>군위고등학교 온라인 교무실</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        /* 커스텀 스크롤바 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        /* 토스트 메시지 애니메이션 */
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes slideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+        .toast-enter { animation: slideIn 0.3s forwards; }
+        .toast-exit { animation: slideOut 0.3s forwards; }
+        
+        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 h-screen overflow-hidden flex flex-col">
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2"></div>
+
+    <!-- App Container -->
+    <div id="app" class="w-full h-full"></div>
+
+<script>
+    // --- 1. 상태 관리 (State) ---
+    const SHEET_URL = 'https://docs.google.com/spreadsheets/d/1Qezwd8-xJS07xTGWY__cI1pVPFv1lZNBV86U8wbYvwk/gviz/tq?tqx=out:csv';
+    const ADMIN_CODE = 'STF-790920';
+
+    let state = {
+        users: [],
+        currentUser: null,
+        isSheetLoaded: false,
+        sheetError: false,
+        currentCategory: '교무부',
+        currentSubCategory: '공지사항',
+        categories: [
+            { id: 1, name: '교무부', type: 'board', subs: ['공지사항', '자료실'] },
+            { id: 2, name: '학생안전부', type: 'board', subs: ['공지사항', '자료실'] },
+            { id: 3, name: '교육연구부', type: 'board', subs: ['공지사항', '자료실'] },
+            { id: 4, name: '교육과정부', type: 'board', subs: ['공지사항', '자료실'] },
+            { id: 5, name: '교육정보부', type: 'board', subs: ['공지사항', '자료실'] },
+            { id: 6, name: '교육혁신부', type: 'board', subs: ['공지사항', '자료실'] },
+            { id: 7, name: '1학년부', type: 'board', subs: ['공지사항', '자료실'] },
+            { id: 8, name: '2학년부', type: 'board', subs: ['공지사항', '자료실'] },
+            { id: 9, name: '3학년부', type: 'board', subs: ['공지사항', '자료실'] },
+            { id: 10, name: '행정실', type: 'board', subs: ['공지사항', '자료실'] }
+        ],
+        posts: [], // { id, category, subCategory, title, content, author, date, files: [{name, url, type}], views }
+        viewPostId: null,
+        isWriteMode: false,
+        isAdminMode: false,
+        isMobileMenuOpen: false
+    };
+
+    // --- 2. 유틸리티 (Utils) ---
+    function showToast(message, type = 'success') {
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        const bgColor = type === 'success' ? 'bg-green-600' : type === 'error' ? 'bg-red-600' : 'bg-blue-600';
+        toast.className = `${bgColor} text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-3 toast-enter`;
+        
+        let icon = type === 'success' ? '<i class="fas fa-check-circle"></i>' : '<i class="fas fa-exclamation-circle"></i>';
+        toast.innerHTML = `${icon} <span>${message}</span>`;
+        
+        container.appendChild(toast);
+        
+        setTimeout(() => {
+            toast.classList.remove('toast-enter');
+            toast.classList.add('toast-exit');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+
+    // CSV 파서 (따옴표 및 쉼표 처리)
+    function parseCSV(str) {
+        const arr = [];
+        let quote = false;
+        let row = 0, col = 0;
+        for (let c = 0; c < str.length; c++) {
+            let cc = str[c], nc = str[c+1];
+            arr[row] = arr[row] || [];
+            arr[row][col] = arr[row][col] || '';
+            if (cc == '"' && quote && nc == '"') { arr[row][col] += cc; ++c; continue; }
+            if (cc == '"') { quote = !quote; continue; }
+            if (cc == ',' && !quote) { ++col; continue; }
+            if (cc == '\r' && nc == '\n' && !quote) { ++row; col = 0; ++c; continue; }
+            if (cc == '\n' && !quote) { ++row; col = 0; continue; }
+            if (cc == '\r' && !quote) { ++row; col = 0; continue; }
+            arr[row][col] += cc;
+        }
+        return arr;
+    }
+
+    const generateId = () => Math.random().toString(36).substr(2, 9);
+    const getToday = () => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    };
+
+    // --- 3. 데이터 로드 (Data Load) ---
+    async function fetchUsers() {
+        try {
+            const response = await fetch(SHEET_URL);
+            if (!response.ok) throw new Error('네트워크 응답이 올바르지 않습니다.');
+            const csvText = await response.text();
+            const rows = parseCSV(csvText);
+            
+            // 첫 번째 행이 헤더인지 확인 (이름, 코드, 부서, 직위)
+            let startIndex = 0;
+            if(rows[0] && (rows[0][0].includes('이름') || rows[0][1].includes('코드'))) {
+                startIndex = 1;
+            }
+
+            const users = [];
+            for (let i = startIndex; i < rows.length; i++) {
+                if (rows[i].length >= 4 && rows[i][0].trim() !== '') {
+                    users.push({
+                        name: rows[i][0].trim(),
+                        code: rows[i][1].trim(),
+                        dept: rows[i][2].trim(),
+                        role: rows[i][3].trim()
+                    });
+                }
+            }
+            state.users = users;
+            state.isSheetLoaded = true;
+        } catch (error) {
+            console.error("구글 시트 로드 실패:", error);
+            state.sheetError = true;
+            // 로드 실패 시 샘플 데이터 제공 (개발/테스트용)
+            state.users = [
+                { name: '테스트교사', code: 'TEST-1234', dept: '교무부', role: '교사' }
+            ];
+            showToast("구글 시트 연동에 실패하여 임시 데이터로 구동됩니다.", "error");
+        }
+        render();
+    }
+
+    // --- 4. 액션 (Actions) ---
+    function handleLogin(e) {
+        e.preventDefault();
+        const codeInput = document.getElementById('user-code').value.trim();
+        
+        if (!codeInput) {
+            showToast('교직원 코드를 입력해주세요.', 'error');
+            return;
+        }
+
+        if (codeInput === ADMIN_CODE) {
+            state.currentUser = { name: '시스템 관리자', code: ADMIN_CODE, dept: '시스템운영', role: '최고관리자', isAdmin: true };
+            showToast('관리자 계정으로 로그인되었습니다.');
+            render();
+            return;
+        }
+
+        const user = state.users.find(u => u.code === codeInput);
+        if (user) {
+            state.currentUser = { ...user, isAdmin: false };
+            showToast(`${user.name} 선생님, 환영합니다.`);
+            render();
+        } else {
+            showToast('등록되지 않은 코드입니다. 코드를 다시 확인해주세요.', 'error');
+        }
+    }
+
+    function handleLogout() {
+        state.currentUser = null;
+        state.currentCategory = state.categories[0].name;
+        state.currentSubCategory = '공지사항';
+        state.viewPostId = null;
+        state.isWriteMode = false;
+        state.isAdminMode = false;
+        render();
+    }
+
+    function selectMenu(catName, subName) {
+        const cat = state.categories.find(c => c.name === catName);
+        if(cat && cat.type === 'link') {
+            window.open(cat.url, '_blank');
+            return;
+        }
+        state.currentCategory = catName;
+        state.currentSubCategory = subName || (cat && cat.subs ? cat.subs[0] : null);
+        state.viewPostId = null;
+        state.isWriteMode = false;
+        state.isAdminMode = false;
+        state.isMobileMenuOpen = false;
+        render();
+    }
+
+    function toggleMobileMenu() {
+        state.isMobileMenuOpen = !state.isMobileMenuOpen;
+        render();
+    }
+
+    // 게시판 관련
+    function goToList() {
+        state.viewPostId = null;
+        state.isWriteMode = false;
+        render();
+    }
+
+    function goToWrite() {
+        state.viewPostId = null;
+        state.isWriteMode = true;
+        render();
+    }
+
+    function viewPost(id) {
+        const post = state.posts.find(p => p.id === id);
+        if (post) {
+            post.views = (post.views || 0) + 1;
+            state.viewPostId = id;
+            state.isWriteMode = false;
+            render();
+        }
+    }
+
+    function deletePost(id) {
+        if(confirm('정말 이 게시글을 삭제하시겠습니까?')) {
+            state.posts = state.posts.filter(p => p.id !== id);
+            showToast('게시글이 삭제되었습니다.');
+            goToList();
+        }
+    }
+
+    async function handlePostSubmit(e) {
+        e.preventDefault();
+        const title = document.getElementById('post-title').value;
+        const content = document.getElementById('post-content').value;
+        const fileInput = document.getElementById('post-files');
+        
+        let filesData = [];
+        
+        if (fileInput.files.length > 0) {
+            showToast('파일을 처리하는 중입니다...', 'info');
+            for (let i = 0; i < fileInput.files.length; i++) {
+                const file = fileInput.files[i];
+                // 브라우저 메모리에만 저장하기 위해 Data URL 변환 (실제 서비스에선 서버 업로드 필요)
+                const dataUrl = await new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.readAsDataURL(file);
+                });
+                
+                filesData.push({
+                    name: file.name,
+                    type: file.type.startsWith('image/') ? 'image' : 'file',
+                    url: dataUrl
+                });
+            }
+        }
+
+        const newPost = {
+            id: generateId(),
+            category: state.currentCategory,
+            subCategory: state.currentSubCategory,
+            title,
+            content,
+            author: state.currentUser.name,
+            authorDept: state.currentUser.dept,
+            date: getToday(),
+            files: filesData,
+            views: 0
+        };
+
+        state.posts.unshift(newPost); // 최신글이 위로
+        showToast('게시글이 성공적으로 등록되었습니다.');
+        goToList();
+    }
+
+    // 관리자 기능
+    function openAdminMode() {
+        state.isAdminMode = true;
+        state.viewPostId = null;
+        state.isWriteMode = false;
+        state.isMobileMenuOpen = false;
+        render();
+    }
+
+    function closeAdminMode() {
+        state.isAdminMode = false;
+        render();
+    }
+
+    function handleAddLinkMenu(e) {
+        e.preventDefault();
+        const linkName = document.getElementById('link-name').value;
+        const linkUrl = document.getElementById('link-url').value;
+        
+        if(linkName && linkUrl) {
+            state.categories.push({
+                id: generateId(),
+                name: linkName,
+                type: 'link',
+                url: linkUrl
+            });
+            showToast('외부 링크 메뉴가 추가되었습니다.');
+            render();
+        }
+    }
+
+    function deleteCategory(id) {
+        if(confirm('이 메뉴를 삭제하시겠습니까? (관련된 게시글은 보이지 않게 됩니다)')) {
+            state.categories = state.categories.filter(c => c.id !== id);
+            showToast('메뉴가 삭제되었습니다.');
+            // 현재 보고 있던 메뉴가 삭제되었다면 첫 메뉴로 이동
+            if (!state.categories.find(c => c.name === state.currentCategory)) {
+                if(state.categories.length > 0) {
+                     selectMenu(state.categories[0].name, state.categories[0].subs ? state.categories[0].subs[0] : null);
+                }
+            } else {
+                render();
+            }
+        }
+    }
+
+    // --- 5. 렌더링 (Rendering) ---
+    function render() {
+        const app = document.getElementById('app');
+        if (!state.currentUser) {
+            app.innerHTML = renderLoginScreen();
+            if(!state.isSheetLoaded) fetchUsers(); // 최초 진입 시 데이터 로드
+        } else {
+            app.innerHTML = renderMainLayout();
+        }
+    }
+
+    function renderLoginScreen() {
+        const loadingStr = !state.isSheetLoaded && !state.sheetError ? 
+            `<div class="text-blue-600 mt-2 text-sm animate-pulse"><i class="fas fa-spinner fa-spin mr-2"></i> 구글 스프레드시트 데이터 연동 중...</div>` : '';
+
+        return `
+            <div class="h-full flex items-center justify-center bg-[url('https://images.unsplash.com/photo-1541339907198-e08756dedf3f?ixlib=rb-4.0.3&auto=format&fit=crop&w=1920&q=80')] bg-cover bg-center">
+                <div class="absolute inset-0 bg-gray-900 bg-opacity-60 backdrop-blur-sm"></div>
+                <div class="relative bg-white p-6 sm:p-8 rounded-2xl shadow-2xl w-full max-w-md m-4 transform transition-all">
+                    <div class="text-center mb-6">
+                        <div class="w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center mx-auto mb-3 shadow-lg">
+                            <i class="fas fa-school text-white text-2xl"></i>
+                        </div>
+                        <h1 class="text-xl font-bold text-gray-800 tracking-tight">군위고등학교</h1>
+                        <h2 class="text-base text-gray-600 mt-1 font-medium">스마트 온라인 교무실</h2>
+                    </div>
+                    
+                    <form onsubmit="handleLogin(event)" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">교직원 접속 코드</label>
+                            <div class="relative">
+                                <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400">
+                                    <i class="fas fa-key text-sm"></i>
+                                </span>
+                                <input type="password" id="user-code" 
+                                    class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-shadow text-sm"
+                                    placeholder="코드를 입력하세요 (예: STF-1234)" ${!state.isSheetLoaded && !state.sheetError ? 'disabled' : ''}>
+                            </div>
+                        </div>
+                        
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                            ${!state.isSheetLoaded && !state.sheetError ? 'disabled' : ''}>
+                            접속하기
+                        </button>
+                    </form>
+                    
+                    <div class="text-center mt-4">
+                        ${loadingStr}
+                    </div>
+
+                    <div class="mt-6 pt-4 border-t border-gray-100 text-center">
+                        <p class="text-xs text-gray-500">개발자 : 가치있는 미래교육 연구소 대표 김병찬</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    function renderMainLayout() {
+        return `
+            <!-- Top Navigation -->
+            <nav class="bg-white border-b border-gray-200 z-30 relative shrink-0">
+                <div class="max-w-full mx-auto px-4 sm:px-6">
+                    <div class="flex justify-between h-14">
+                        <div class="flex items-center">
+                            <!-- Mobile menu button -->
+                            <button onclick="toggleMobileMenu()" class="mr-3 lg:hidden text-gray-500 hover:text-gray-700 focus:outline-none">
+                                <i class="fas ${state.isMobileMenuOpen ? 'fa-times' : 'fa-bars'} text-lg"></i>
+                            </button>
+                            <div class="flex-shrink-0 flex items-center gap-2">
+                                <div class="w-7 h-7 bg-blue-600 rounded flex items-center justify-center">
+                                    <i class="fas fa-school text-white text-xs"></i>
+                                </div>
+                                <span class="font-bold text-base text-gray-800 tracking-tight hidden sm:block">군위고등학교 온라인 교무실</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="hidden sm:block text-xs text-gray-500 text-right mr-3 border-r pr-3 border-gray-200">
+                                <div>개발자</div>
+                                <div class="font-semibold text-gray-700">가치있는 미래교육 연구소 대표 김병찬</div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div class="w-7 h-7 bg-gray-100 rounded-full flex items-center justify-center text-blue-600">
+                                    <i class="fas fa-user text-xs"></i>
+                                </div>
+                                <div class="text-xs">
+                                    <div class="font-bold text-gray-800">${state.currentUser.name} ${state.currentUser.role}</div>
+                                    <div class="text-[10px] text-gray-500">${state.currentUser.dept}</div>
+                                </div>
+                                <button onclick="handleLogout()" class="ml-1 text-gray-400 hover:text-red-500 transition-colors" title="로그아웃">
+                                    <i class="fas fa-sign-out-alt text-base"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </nav>
+
+            <div class="flex flex-1 overflow-hidden relative">
+                <!-- Sidebar -->
+                <aside class="${state.isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 absolute lg:static inset-y-0 left-0 w-56 bg-gray-800 text-white shadow-xl transition-transform duration-300 ease-in-out z-20 flex flex-col">
+                    <div class="flex-1 overflow-y-auto py-2">
+                        <div class="px-3 mb-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider mt-2">메뉴 카테고리</div>
+                        <nav class="space-y-0.5">
+                            ${state.categories.map(cat => {
+                                if (cat.type === 'link') {
+                                    return `
+                                        <div class="px-2">
+                                            <button onclick="selectMenu('${cat.name}', null)" class="w-full flex items-center pl-2 pr-3 py-1.5 text-xs font-medium rounded text-gray-300 hover:bg-gray-700 hover:text-white group transition-colors">
+                                                <i class="fas fa-external-link-alt mr-2 text-gray-400 group-hover:text-white"></i>
+                                                ${cat.name}
+                                            </button>
+                                        </div>
+                                    `;
+                                }
+
+                                const isCatActive = state.currentCategory === cat.name && !state.isAdminMode;
+                                return `
+                                    <div class="px-2 mb-1">
+                                        <div class="flex items-center pl-2 pr-3 py-1.5 text-xs font-bold rounded ${isCatActive ? 'bg-gray-900 text-white' : 'text-gray-300 hover:bg-gray-700'}">
+                                            <i class="fas fa-folder mr-2 text-blue-400"></i>
+                                            ${cat.name}
+                                        </div>
+                                        <div class="mt-0.5 space-y-0.5 pl-7 border-l-2 border-gray-700 ml-3">
+                                            ${cat.subs.map(sub => {
+                                                const isActive = isCatActive && state.currentSubCategory === sub;
+                                                return `
+                                                    <button onclick="selectMenu('${cat.name}', '${sub}')" 
+                                                        class="w-full flex items-center px-2 py-1 text-xs rounded transition-colors ${isActive ? 'bg-blue-600 text-white font-medium' : 'text-gray-400 hover:text-white hover:bg-gray-700'}">
+                                                        <span class="w-1 h-1 rounded-full mr-2 ${isActive ? 'bg-white' : 'bg-gray-500'}"></span>
+                                                        ${sub}
+                                                    </button>
+                                                `;
+                                            }).join('')}
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </nav>
+                    </div>
+                    
+                    ${state.currentUser.isAdmin ? `
+                        <div class="p-3 bg-gray-900 mt-auto shrink-0 border-t border-gray-700">
+                            <button onclick="openAdminMode()" class="w-full flex items-center justify-center gap-2 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded text-xs font-medium transition-colors">
+                                <i class="fas fa-cog"></i> 시스템 관리
+                            </button>
+                        </div>
+                    ` : ''}
+                </aside>
+
+                <!-- Mobile overlay -->
+                ${state.isMobileMenuOpen ? `
+                    <div class="fixed inset-0 bg-gray-600 bg-opacity-75 z-10 lg:hidden" onclick="toggleMobileMenu()"></div>
+                ` : ''}
+
+                <!-- Main Content Area -->
+                <main class="flex-1 bg-gray-50 overflow-y-auto w-full relative">
+                    <div class="max-w-6xl mx-auto py-4 px-3 sm:px-6 lg:px-8">
+                        ${state.isAdminMode ? renderAdminPanel() : 
+                          state.isWriteMode ? renderWriteForm() : 
+                          state.viewPostId ? renderPostView() : 
+                          renderBoardList()}
+                    </div>
+                </main>
+            </div>
+        `;
+    }
+
+    // --- 메인 뷰 컴포넌트 ---
+
+    function renderBoardList() {
+        // 현재 카테고리 필터링
+        const filteredPosts = state.posts.filter(p => p.category === state.currentCategory && p.subCategory === state.currentSubCategory);
+
+        return `
+            <div class="mb-3 flex justify-between items-end">
+                <div>
+                    <h2 class="text-xl font-bold text-gray-900 flex items-center gap-2">
+                        ${state.currentCategory} <i class="fas fa-chevron-right text-xs text-gray-400"></i> ${state.currentSubCategory}
+                    </h2>
+                </div>
+                <button onclick="goToWrite()" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded font-medium text-xs flex items-center gap-1 shadow-sm transition-colors">
+                    <i class="fas fa-pen"></i> 글쓰기
+                </button>
+            </div>
+
+            <div class="bg-white shadow-sm rounded-lg overflow-hidden border border-gray-200">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-medium text-gray-500 uppercase tracking-wider w-12 text-center">번호</th>
+                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-medium text-gray-500 uppercase tracking-wider">제목</th>
+                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-medium text-gray-500 uppercase tracking-wider w-24">작성자</th>
+                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-medium text-gray-500 uppercase tracking-wider w-24">작성일</th>
+                                <th scope="col" class="px-4 py-2 text-left text-[11px] font-medium text-gray-500 uppercase tracking-wider w-12 text-center">조회</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${filteredPosts.length === 0 ? `
+                                <tr>
+                                    <td colspan="5" class="px-4 py-8 text-center text-gray-500 text-sm">
+                                        등록된 게시글이 없습니다.
+                                    </td>
+                                </tr>
+                            ` : filteredPosts.map((post, idx) => `
+                                <tr class="hover:bg-gray-50 cursor-pointer transition-colors" onclick="viewPost('${post.id}')">
+                                    <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500 text-center">${filteredPosts.length - idx}</td>
+                                    <td class="px-4 py-2 text-xs font-medium text-gray-900">
+                                        <div class="flex items-center gap-1.5">
+                                            <span class="truncate max-w-[150px] sm:max-w-xs md:max-w-md">${post.title}</span>
+                                            ${post.files && post.files.length > 0 ? `<i class="fas fa-paperclip text-gray-400 text-[10px]"></i>` : ''}
+                                        </div>
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">
+                                        ${post.author} <span class="text-[10px] text-gray-400">(${post.authorDept})</span>
+                                    </td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${post.date.split(' ')[0]}</td>
+                                    <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500 text-center">${post.views || 0}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
+
+    function renderWriteForm() {
+        return `
+            <div class="mb-3 flex justify-between items-center border-b pb-2">
+                <h2 class="text-lg font-bold text-gray-900">새 글 작성</h2>
+                <button onclick="goToList()" class="text-gray-500 hover:text-gray-700 flex items-center gap-1 text-xs font-medium">
+                    <i class="fas fa-arrow-left"></i> 목록으로
+                </button>
+            </div>
+
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-4 sm:p-5">
+                <form onsubmit="handlePostSubmit(event)" class="space-y-4">
+                    <div class="flex gap-2 items-center">
+                        <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                            ${state.currentCategory}
+                        </span>
+                        <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                            ${state.currentSubCategory}
+                        </span>
+                    </div>
+
+                    <div>
+                        <input type="text" id="post-title" required
+                            class="w-full px-3 py-1.5 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
+                            placeholder="제목을 입력하세요">
+                    </div>
+
+                    <div>
+                        <textarea id="post-content" rows="8" required
+                            class="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none text-sm"
+                            placeholder="내용을 입력하세요"></textarea>
+                    </div>
+
+                    <div class="bg-gray-50 p-3 rounded border border-dashed border-gray-300">
+                        <input type="file" id="post-files" multiple 
+                            class="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer">
+                    </div>
+
+                    <div class="flex justify-end gap-2 pt-2 border-t border-gray-100">
+                        <button type="button" onclick="goToList()" class="px-4 py-1.5 border border-gray-300 rounded text-xs text-gray-700 font-medium hover:bg-gray-50 transition-colors">
+                            취소
+                        </button>
+                        <button type="submit" class="px-4 py-1.5 bg-blue-600 rounded text-xs text-white font-medium hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5">
+                            <i class="fas fa-check"></i> 등록하기
+                        </button>
+                    </div>
+                </form>
+            </div>
+        `;
+    }
+
+    function renderPostView() {
+        const post = state.posts.find(p => p.id === state.viewPostId);
+        if(!post) return `<div>게시글을 찾을 수 없습니다.</div>`;
+
+        // 작성자이거나 관리자일 경우 삭제 버튼 표시
+        const canDelete = state.currentUser.isAdmin || state.currentUser.name === post.author;
+
+        // 첨부파일 분리 (이미지 / 일반파일)
+        const images = (post.files || []).filter(f => f.type === 'image');
+        const docs = (post.files || []).filter(f => f.type === 'file');
+
+        return `
+            <div class="mb-3 flex justify-between items-center border-b pb-2">
+                <div class="flex items-center gap-2">
+                    <button onclick="goToList()" class="text-gray-500 hover:text-gray-900 transition-colors">
+                        <i class="fas fa-arrow-left text-lg"></i>
+                    </button>
+                    <span class="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded">${post.category} > ${post.subCategory}</span>
+                </div>
+                ${canDelete ? `
+                    <button onclick="deletePost('${post.id}')" class="text-red-500 hover:bg-red-50 px-2 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1">
+                        <i class="fas fa-trash-alt"></i> 삭제
+                    </button>
+                ` : ''}
+            </div>
+
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+                <!-- Header -->
+                <div class="p-4 border-b border-gray-100">
+                    <h1 class="text-lg font-bold text-gray-900 mb-2">${post.title}</h1>
+                    <div class="flex flex-wrap items-center text-xs text-gray-500 gap-3">
+                        <div class="flex items-center gap-1">
+                            <span class="font-medium text-gray-700">${post.author}</span>
+                            <span class="text-gray-400">(${post.authorDept})</span>
+                        </div>
+                        <div class="flex items-center gap-1"><i class="far fa-clock"></i> ${post.date}</div>
+                        <div class="flex items-center gap-1"><i class="far fa-eye"></i> 조회 ${post.views}</div>
+                    </div>
+                </div>
+
+                <!-- Content -->
+                <div class="p-4 sm:p-5 min-h-[150px]">
+                    <div class="prose max-w-none text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">${post.content}</div>
+                    
+                    ${images.length > 0 ? `
+                        <div class="mt-4 space-y-3">
+                            ${images.map(img => `
+                                <img src="${img.url}" alt="${img.name}" class="max-w-full h-auto max-h-[300px] object-contain rounded border border-gray-200 shadow-sm">
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                </div>
+
+                <!-- Attachments -->
+                ${docs.length > 0 ? `
+                    <div class="bg-gray-50 p-4 border-t border-gray-100">
+                        <h3 class="text-xs font-bold text-gray-700 mb-2 flex items-center gap-1.5">
+                            <i class="fas fa-paperclip"></i> 첨부파일 (${docs.length})
+                        </h3>
+                        <ul class="space-y-1.5">
+                            ${docs.map(doc => `
+                                <li>
+                                    <a href="${doc.url}" download="${doc.name}" class="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 hover:underline bg-white px-2.5 py-1.5 rounded border border-gray-200 shadow-sm transition-all w-full sm:w-auto">
+                                        <i class="far fa-file-alt text-gray-400"></i> <span class="truncate max-w-[200px]">${doc.name}</span>
+                                        <i class="fas fa-download ml-1 text-[10px] text-gray-400"></i>
+                                    </a>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }
+
+    function renderAdminPanel() {
+        return `
+            <div class="mb-4 flex justify-between items-center border-b pb-2">
+                <h2 class="text-lg font-bold text-purple-800 flex items-center gap-2">
+                    <i class="fas fa-cog"></i> 시스템 관리자 메뉴
+                </h2>
+                <button onclick="closeAdminMode()" class="text-gray-500 hover:text-gray-700 flex items-center gap-1 text-xs font-medium">
+                    <i class="fas fa-times"></i> 닫기
+                </button>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <!-- 외부 링크 메뉴 추가 폼 -->
+                <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-4">
+                    <h3 class="text-sm font-bold text-gray-800 mb-3 border-b pb-1">새 외부 링크 메뉴 추가</h3>
+                    <form onsubmit="handleAddLinkMenu(event)" class="space-y-3">
+                        <div>
+                            <input type="text" id="link-name" required
+                                class="w-full px-2.5 py-1.5 border border-gray-300 rounded focus:ring-purple-500 focus:border-purple-500 text-sm"
+                                placeholder="메뉴 이름 (예: 나이스 접속)">
+                        </div>
+                        <div>
+                            <input type="url" id="link-url" required
+                                class="w-full px-2.5 py-1.5 border border-gray-300 rounded focus:ring-purple-500 focus:border-purple-500 text-sm"
+                                placeholder="연결할 URL (https://...)">
+                        </div>
+                        <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium py-1.5 rounded shadow-sm transition-colors">
+                            메뉴 추가
+                        </button>
+                    </form>
+                </div>
+
+                <!-- 현재 메뉴 관리 리스트 -->
+                <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-4">
+                    <h3 class="text-sm font-bold text-gray-800 mb-3 border-b pb-1">현재 구성된 메뉴 관리</h3>
+                    <div class="space-y-1.5 max-h-[250px] overflow-y-auto pr-1 custom-scrollbar">
+                        ${state.categories.map(cat => `
+                            <div class="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-100">
+                                <div class="flex items-center gap-2">
+                                    <div class="w-6 h-6 rounded bg-white border border-gray-200 flex items-center justify-center text-gray-500 shrink-0">
+                                        <i class="fas ${cat.type === 'link' ? 'fa-link text-purple-500 text-[10px]' : 'fa-folder text-blue-500 text-[10px]'}"></i>
+                                    </div>
+                                    <div>
+                                        <div class="font-medium text-xs text-gray-800">${cat.name}</div>
+                                        <div class="text-[10px] text-gray-400">
+                                            ${cat.type === 'link' ? `<span class="truncate max-w-[120px] inline-block align-bottom">${cat.url}</span>` : `하위: ${cat.subs.join(', ')}`}
+                                        </div>
+                                    </div>
+                                </div>
+                                <button onclick="deleteCategory('${cat.id}')" class="text-red-500 hover:bg-red-50 p-1.5 rounded transition-colors" title="삭제">
+                                    <i class="fas fa-trash-alt text-xs"></i>
+                                </button>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-8 bg-blue-50 rounded-xl p-6 border border-blue-100">
+                <h3 class="text-blue-800 font-bold mb-2 flex items-center gap-2">
+                    <i class="fas fa-info-circle"></i> 관리자 안내사항
+                </h3>
+                <ul class="text-sm text-blue-700 space-y-1 list-disc list-inside">
+                    <li>현재 시스템은 브라우저 메모리 기반으로 동작하므로, <strong>새로고침 시 등록한 게시글과 추가한 메뉴가 초기화</strong>됩니다.</li>
+                    <li>모든 게시물 삭제 권한을 가집니다. 게시판에서 게시글 조회 후 우측 상단의 삭제 버튼을 이용하세요.</li>
+                    <li>교직원 데이터는 연결된 구글 스프레드시트에서 실시간으로 가져옵니다. (접속 코드 등)</li>
+                </ul>
+            </div>
+        `;
+    }
+
+    // 초기화
+    window.onload = () => {
+        render(); // 최초 로그인 화면 렌더링
+        // fetchUsers는 로그인 화면 내부에서 자동 호출됨
+    };
+</script>
+</body>
+</html>
